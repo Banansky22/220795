@@ -2,7 +2,7 @@ import os
 import logging
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-import pandas as pd
+import polars as pd
 import io
 import numpy as np
 from datetime import datetime
