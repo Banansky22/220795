@@ -1624,9 +1624,41 @@ def run_web_server():
     print(f"🌐 Web server starting on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
 
-# === ОСНОВНАЯ ФУНКЦИЯ ===
+# === WEBHOOK SETUP FOR RENDER ===
+import asyncio
+from telegram import Update
+from telegram.ext import Application, ContextTypes
+
+async def setup_webhook():
+    """Настраивает вебхук для Render"""
+    print("🌐 Настраиваю вебхук для Render...")
+    
+    # Создаем временное приложение для настройки вебхука
+    temp_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # URL вебхука - ваш домен Render + токен
+    webhook_url = f"https://two20795.onrender.com/{TELEGRAM_BOT_TOKEN}"
+    
+    try:
+        # Устанавливаем вебхук
+        await temp_app.bot.set_webhook(webhook_url)
+        print(f"✅ Вебхук установлен: {webhook_url}")
+        
+        # Проверяем информацию о вебхуке
+        webhook_info = await temp_app.bot.get_webhook_info()
+        print(f"📊 Информация о вебхуке:")
+        print(f"   URL: {webhook_info.url}")
+        print(f"   Ожидает сообщений: {webhook_info.pending_update_count}")
+        print(f"   Ошибок: {webhook_info.last_error_message}")
+        
+    except Exception as e:
+        print(f"❌ Ошибка настройки вебхука: {e}")
+    
+    await temp_app.shutdown()
+
+# === ОБНОВЛЕННАЯ ОСНОВНАЯ ФУНКЦИЯ ===
 def main():
-    """Обновленная основная функция с web-сервером"""
+    """Обновленная основная функция с web-сервером и вебхуком"""
     global WRITE_ACCESS
     
     # Проверяем доступность записи
@@ -1640,6 +1672,10 @@ def main():
         print("🌐 Запускаю web-сервер для Render...")
         server_thread = threading.Thread(target=run_web_server, daemon=True)
         server_thread.start()
+        
+        # Настраиваем вебхук при запуске
+        print("🔄 Настраиваю вебхук...")
+        asyncio.run(setup_webhook())
     
     # Обработчики сигналов для корректного завершения
     signal.signal(signal.SIGINT, signal_handler)
@@ -1647,6 +1683,7 @@ def main():
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # [ЗДЕСЬ ДОЛЖЕН БЫТЬ ВЕСЬ ВАШ СУЩЕСТВУЮЩИЙ КОД РЕГИСТРАЦИИ HANDLERS]
     # ConversationHandler для выборочного анализа
     conv_selective = ConversationHandler(
         entry_points=[MessageHandler(filters.Text("🎯 Выборочный анализ"), selective_analysis_start)],
