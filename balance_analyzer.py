@@ -1655,10 +1655,11 @@ def webhook():
         return jsonify({"status": "error"}), 500
 
 def run_web_server():
-    """Запускает web-сервер в отдельном потоке"""
+    """Запускает web-сервер в основном потоке"""
     port = int(os.environ.get('PORT', 10000))
     print(f"🌐 Web server starting on port {port}")
     print(f"🌐 Webhook URL: https://two20795.onrender.com/{TELEGRAM_BOT_TOKEN}")
+    print("🚀 Бот работает в режиме WEBHOOK")
     app.run(host='0.0.0.0', port=port, debug=False)
     
 # === WEBHOOK SETUP FOR RENDER ===
