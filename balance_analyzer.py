@@ -1626,10 +1626,27 @@ def webhook():
         # Получаем данные от Telegram
         update_data = request.get_json()
         
-        # Здесь будет обработка обновлений
-        # Пока просто логируем
         if update_data:
-            print(f"📨 Получено обновление: {update_data}")
+            print(f"📨 Получено обновление от пользователя")
+            
+            # Создаем временное приложение для обработки
+            async def process_update():
+                temp_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+                
+                # Регистрируем обработчики
+                temp_app.add_handler(CommandHandler("start", start))
+                temp_app.add_handler(CommandHandler("help", help_command))
+                temp_app.add_handler(MessageHandler(filters.Document.ALL, receive_document))
+                temp_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+                
+                # Обрабатываем обновление
+                update = Update.de_json(update_data, temp_app.bot)
+                await temp_app.process_update(update)
+                
+                await temp_app.shutdown()
+            
+            # Запускаем обработку
+            asyncio.run(process_update())
             
         return jsonify({"status": "ok"})
         
@@ -1678,7 +1695,7 @@ async def setup_webhook():
 
 # === ОБНОВЛЕННАЯ ОСНОВНАЯ ФУНКЦИЯ ===
 def main():
-    """Обновленная основная функция с web-сервером и вебхуком"""
+    """Обновленная основная функция только с web-сервером для Render"""
     global WRITE_ACCESS
     
     # Проверяем доступность записи
@@ -1687,80 +1704,84 @@ def main():
     if not WRITE_ACCESS:
         print("⚠️ РЕЖИМ ТОЛЬКО В ПАМЯТИ - данные не сохранятся между перезапусками")
     
-    # Запускаем web-сервер в отдельном потоке для Render
+    # Запускаем web-сервер в основном потоке для Render
     if ON_RENDER:
         print("🌐 Запускаю web-сервер для Render...")
-        server_thread = threading.Thread(target=run_web_server, daemon=True)
-        server_thread.start()
+        print("🚫 Режим WEBHOOK - polling отключен")
         
         # Настраиваем вебхук при запуске
         print("🔄 Настраиваю вебхук...")
         asyncio.run(setup_webhook())
-    
-    # Обработчики сигналов для корректного завершения
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # [ЗДЕСЬ ДОЛЖЕН БЫТЬ ВЕСЬ ВАШ СУЩЕСТВУЮЩИЙ КОД РЕГИСТРАЦИИ HANDLERS]
-    # ConversationHandler для выборочного анализа
-    conv_selective = ConversationHandler(
-        entry_points=[MessageHandler(filters.Text("🎯 Выборочный анализ"), selective_analysis_start)],
-        states={
-            SELECT_INDICATORS: [
-                MessageHandler(filters.Text([
-                    "Выручка и прибыль", "Активы и обязательства", "Ликвидность",
-                    "Рентабельность", "Финансовая устойчивость", "Оборачиваемость"
-                ]), handle_indicator_selection),
-                MessageHandler(filters.Text("✅ Начать выборочный анализ"), start_selective_analysis),
-                MessageHandler(filters.Text("🔙 Назад"), start)
-            ],
-        },
-        fallbacks=[CommandHandler("start", start)]
-    )
-    
-    # ConversationHandler для сравнения с нормативами
-    conv_industry = ConversationHandler(
-        entry_points=[MessageHandler(filters.Text("📋 Сравнение с нормативами"), industry_comparison_start)],
-        states={
-            SELECT_INDUSTRY: [
-                MessageHandler(filters.Text(["Розничная торговля", "Производство", "Сфера услуг"]), handle_industry_selection),
-                MessageHandler(filters.Text("🔙 Назад"), start)
-            ],
-        },
-        fallbacks=[CommandHandler("start", start)]
-    )
-    
-    # Регистрируем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("template", template_command))
-    application.add_handler(CommandHandler("sample", sample_command))
-    application.add_handler(CommandHandler("debug_save", debug_save))
-    
-    # Регистрируем ConversationHandler
-    application.add_handler(conv_selective)
-    application.add_handler(conv_industry)
-    
-    # Регистрируем обработчики сообщений
-    application.add_handler(MessageHandler(filters.Document.ALL, receive_document))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("✅ УЛУЧШЕННЫЙ БУХГАЛТЕРСКИЙ АНАЛИЗАТОР ЗАПУЩЕН!")
-    print("🎯 Доступны функции:")
-    print("   • Интерактивное меню")
-    print("   • Выборочный анализ") 
-    print("   • Сравнение с нормативами")
-    print("   • Прогнозирование тенденций")
-    print("   • Экспорт в TXT")
-    print("   • Специализированные анализы")
-    print("   • Полный финансовый анализ")
-    print(f"💾 Доступность записи файлов: {'✅ ДА' if WRITE_ACCESS else '❌ НЕТ'}")
-    print(f"🌐 Web-сервер: {'✅ ЗАПУЩЕН' if ON_RENDER else '❌ ВЫКЛЮЧЕН'}")
-    print("\n🛑 Для завершения работы нажмите Ctrl+C")
-    
-    application.run_polling(drop_pending_updates=True)
+        
+        # Запускаем Flask сервер в основном потоке
+        run_web_server()
+    else:
+        # Локальный режим с polling
+        print("🖥️ Локальный режим - запускаю polling...")
+        
+        # Обработчики сигналов для корректного завершения
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Регистрируем обработчики команд
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("template", template_command))
+        application.add_handler(CommandHandler("sample", sample_command))
+        application.add_handler(CommandHandler("debug_save", debug_save))
+        
+        # ConversationHandler для выборочного анализа
+        conv_selective = ConversationHandler(
+            entry_points=[MessageHandler(filters.Text("🎯 Выборочный анализ"), selective_analysis_start)],
+            states={
+                SELECT_INDICATORS: [
+                    MessageHandler(filters.Text([
+                        "Выручка и прибыль", "Активы и обязательства", "Ликвидность",
+                        "Рентабельность", "Финансовая устойчивость", "Оборачиваемость"
+                    ]), handle_indicator_selection),
+                    MessageHandler(filters.Text("✅ Начать выборочный анализ"), start_selective_analysis),
+                    MessageHandler(filters.Text("🔙 Назад"), start)
+                ],
+            },
+            fallbacks=[CommandHandler("start", start)]
+        )
+        
+        # ConversationHandler для сравнения с нормативами
+        conv_industry = ConversationHandler(
+            entry_points=[MessageHandler(filters.Text("📋 Сравнение с нормативами"), industry_comparison_start)],
+            states={
+                SELECT_INDUSTRY: [
+                    MessageHandler(filters.Text(["Розничная торговля", "Производство", "Сфера услуг"]), handle_industry_selection),
+                    MessageHandler(filters.Text("🔙 Назад"), start)
+                ],
+            },
+            fallbacks=[CommandHandler("start", start)]
+        )
+        
+        # Регистрируем ConversationHandler
+        application.add_handler(conv_selective)
+        application.add_handler(conv_industry)
+        
+        # Регистрируем обработчики сообщений
+        application.add_handler(MessageHandler(filters.Document.ALL, receive_document))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        print("✅ УЛУЧШЕННЫЙ БУХГАЛТЕРСКИЙ АНАЛИЗАТОР ЗАПУЩЕН!")
+        print("🎯 Доступны функции:")
+        print("   • Интерактивное меню")
+        print("   • Выборочный анализ") 
+        print("   • Сравнение с нормативами")
+        print("   • Прогнозирование тенденций")
+        print("   • Экспорт в TXT")
+        print("   • Специализированные анализы")
+        print("   • Полный финансовый анализ")
+        print(f"💾 Доступность записи файлов: {'✅ ДА' if WRITE_ACCESS else '❌ НЕТ'}")
+        print("🌐 Режим: POLLING (локальный)")
+        print("\n🛑 Для завершения работы нажмите Ctrl+C")
+        
+        application.run_polling(drop_pending_updates=True)
 
 # === ЗАПУСК ПРИЛОЖЕНИЯ ===
 if __name__ == '__main__':
