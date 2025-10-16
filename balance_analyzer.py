@@ -1603,11 +1603,12 @@ def signal_handler(sig, frame):
     print('\n✅ Бот корректно завершает работу...')
     sys.exit(0)
 
-# === WEB SERVER FOR RENDER ===
-from flask import Flask
+# === WEB SERVER FOR RENDER WITH WEBHOOK ===
+from flask import Flask, request, jsonify
 import threading
+import hmac
+import hashlib
 
-# Создаем простой Flask сервер для здоровья
 app = Flask(__name__)
 
 @app.route('/')
@@ -1618,12 +1619,31 @@ def health_check():
 def health():
     return {"status": "healthy", "service": "telegram-bot"}
 
+@app.route(f'/{TELEGRAM_BOT_TOKEN}', methods=['POST'])
+def webhook():
+    """Обработчик вебхука от Telegram"""
+    try:
+        # Получаем данные от Telegram
+        update_data = request.get_json()
+        
+        # Здесь будет обработка обновлений
+        # Пока просто логируем
+        if update_data:
+            print(f"📨 Получено обновление: {update_data}")
+            
+        return jsonify({"status": "ok"})
+        
+    except Exception as e:
+        print(f"❌ Ошибка обработки вебхука: {e}")
+        return jsonify({"status": "error"}), 500
+
 def run_web_server():
     """Запускает web-сервер в отдельном потоке"""
     port = int(os.environ.get('PORT', 10000))
     print(f"🌐 Web server starting on port {port}")
+    print(f"🌐 Webhook URL: https://two20795.onrender.com/{TELEGRAM_BOT_TOKEN}")
     app.run(host='0.0.0.0', port=port, debug=False)
-
+    
 # === WEBHOOK SETUP FOR RENDER ===
 import asyncio
 from telegram import Update
