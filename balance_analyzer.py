@@ -1,55 +1,32 @@
 import os
 import logging
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-import polars as pd
+import pandas as pd
 import io
 import numpy as np
 from datetime import datetime
 import re
 import json
-import signal
-import sys
-
-# Проверка на Render
-ON_RENDER = os.environ.get('RENDER', False)
 
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = "8458816425:AAGW5r8Xa7W5FrjOwOztgLr3bHFJqi8HaLI"
+# Получаем токен из переменных окружения
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8458816425:AAGW5r8Xa7W5FrjOwOztgLr3bHFJqi8HaLI')
 
-# Глобальная переменная для отслеживания доступности записи
-WRITE_ACCESS = False  # Больше не нужна, т.к. работаем в RAM
-
-# Простая проверка
+# Проверка токена
 if not TELEGRAM_BOT_TOKEN:
-    print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен!")
+    logger.error("❌ TELEGRAM_BOT_TOKEN не установлен!")
     exit(1)
 
 print("✅ Токен успешно загружен!")
 print("🚀 БУХГАЛТЕРСКИЙ АНАЛИЗАТОР ЗАПУЩЕН...")
-
-# Глобальная переменная для отслеживания доступности записи
-WRITE_ACCESS = True
-
-def check_write_permissions():
-    """Проверяет доступность записи файлов на сервере"""
-    try:
-        test_dir = "temp_files"
-        os.makedirs(test_dir, exist_ok=True)
-        test_file = os.path.join(test_dir, "test_write.txt")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.remove(test_file)
-        print("✅ Файловая система доступна для записи")
-        return True
-    except Exception as e:
-        print(f"⚠️ Файловая система только для чтения: {e}")
-        return False
 
 # Создаем папку для временных файлов
 os.makedirs("temp_files", exist_ok=True)
@@ -135,25 +112,10 @@ INDICATOR_GROUPS = {
     'Оборачиваемость': ['выручка', 'запасы', 'дебиторская задолженность', 'активы всего']
 }
 
-# === ФУНКЦИИ ФАЙЛОВОГО ХРАНИЛИЩА ===
-
-def read_excel_file(file_bytes, file_name):
-    """Читает Excel файл с поддержкой разных форматов"""
-    try:
-        if file_name.endswith('.xls'):
-            return pl.read_excel(io.BytesIO(file_bytes), engine='xlrd')
-        else:
-            return pl.read_excel(io.BytesIO(file_bytes), engine='openpyxl')
-    except Exception as e:
-        raise Exception(f"Не удалось прочитать файл: {str(e)}")
-
-# === ОСНОВНЫЕ ФУНКЦИИ ===
-
+# === ОСНОВНЫЕ ОБРАБОТЧИКИ КОМАНД ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Улучшенный обработчик команды /start с меню выбора"""
     user_id = update.message.from_user.id
-    
-    # Никаких попыток сохранять файлы, всё храним в оперативной памяти
     context.user_data.clear()
     
     keyboard = [
@@ -192,7 +154,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Сравнение с отраслевыми нормативами
 • Прогнозирование тенденций
 • Экспорт отчетов в TXT
-• 💾 **Сохранение данных между сессиями**
 
 📊 **ТИПЫ АНАЛИЗА:**
 • 📊 Полный анализ - все показатели
@@ -212,111 +173,61 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     await update.message.reply_text(help_text)
 
-async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает шаблон для заполнения"""
-    template = """
-📋 **ШАБЛОН ОТЧЕТНОСТИ С ПЕРИОДАМИ:**
-
-| Наименование показателя | 31.12.2022 | 31.12.2023 | 31.12.2024 |
-|-------------------------|------------|------------|------------|
-| Выручка                 | 800,000    | 1,000,000  | 1,200,000  |
-| Чистая прибыль          | 150,000    | 200,000    | 250,000    |
-| Основные средства       | 450,000    | 500,000    | 550,000    |
-| Запасы                  | 120,000    | 150,000    | 180,000    |
-| Дебиторская задолженность | 80,000   | 100,000    | 120,000    |
-| Денежные средства       | 40,000     | 50,000     | 60,000     |
-| Итого активы            | 750,000    | 800,000    | 850,000    |
-| Уставный капитал        | 300,000    | 300,000    | 300,000    |
-| Нераспределенная прибыль | 120,000   | 200,000    | 250,000    |
-| Краткосрочные обязательства | 330,000 | 300,000 | 300,000 |
-
-💡 **Бот понимает различные форматы дат**
-"""
-    await update.message.reply_text(template)
-
-async def sample_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Создает пример файла с периодами для тестирования"""
-    sample_data = {
-        'Наименование показателя': [
-            'Выручка', 
-            'Чистая прибыль', 
-            'Основные средства', 
-            'Запасы',
-            'Дебиторская задолженность', 
-            'Денежные средства', 
-            'Итого активы',
-            'Уставный капитал', 
-            'Нераспределенная прибыль', 
-            'Краткосрочные обязательства'
-        ],
-        '31.12.2022': [800000, 150000, 450000, 120000, 80000, 40000, 750000, 
-                       300000, 120000, 330000],
-        '31.12.2023': [1000000, 200000, 500000, 150000, 100000, 50000, 800000,
-                       300000, 200000, 300000],
-        '31.12.2024': [1200000, 250000, 550000, 180000, 120000, 60000, 850000,
-                       300000, 250000, 300000]
-    }
-    
-    df = pd.DataFrame(sample_data)
-    
-    # Сохраняем в буфер
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='Отчетность по периодам', index=False)
-    
-    buffer.seek(0)
-    
-    # Отправляем файл
-    await update.message.reply_document(
-        document=buffer,
-        filename='пример_отчетности_с_периодами.xlsx',
-        caption='📋 Вот пример файла с отчетами за несколько периодов. Отправьте его боту для анализа динамики!'
-    )
-
-async def debug_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Диагностика сохранения данных"""
-    user_id = update.message.from_user.id
-    
-    # Проверяем права на запись
-    test_dir = "temp_files/test_write"
+async def receive_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик загрузки Excel файлов"""
     try:
-        os.makedirs(test_dir, exist_ok=True)
-        test_file = os.path.join(test_dir, "test.txt")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.remove(test_file)
-        write_access = "✅ Есть права на запись"
+        if not update.message.document:
+            await update.message.reply_text("📎 Пожалуйста, пришлите Excel файл с отчетностью")
+            return
+
+        file = update.message.document
+        file_name = file.file_name.lower()
+
+        if not (file_name.endswith('.xlsx') or file_name.endswith('.xls')):
+            await update.message.reply_text("❌ Пожалуйста, пришлите файл в формате Excel (.xlsx или .xls)")
+            return
+
+        await update.message.reply_text("⏳ Анализирую структуру файла...")
+
+        # Скачиваем файл
+        file_obj = await file.get_file()
+        file_bytes = await file_obj.download_as_bytearray()
+
+        # Читаем Excel файл
+        try:
+            df = read_excel_file(file_bytes, file_name)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка чтения файла: {str(e)}")
+            return
+        
+        # Определяем периоды
+        periods = detect_periods(df)
+        
+        if not periods:
+            await update.message.reply_text("❌ Не удалось определить периоды в файле")
+            return
+        
+        # Извлекаем данные по периодам
+        periods_data = extract_financial_data_by_period(df, periods)
+        
+        # Сохраняем данные в контекст пользователя
+        context.user_data.update({
+            'periods_data': periods_data,
+            'file_name': file_name,
+            'loaded_at': datetime.now().isoformat()
+        })
+        
+        extracted_count = sum(len(data) for data in periods_data.values())
+        await update.message.reply_text(
+            f"✅ Файл успешно обработан!\n"
+            f"📊 Извлечено показателей: {extracted_count}\n"
+            f"📅 Периодов: {len(periods)}\n\n"
+            f"🎯 **Теперь выберите тип анализа:**"
+        )
+
     except Exception as e:
-        write_access = f"❌ Нет прав на запись: {e}"
-    
-    # Проверяем существование папки пользователя
-    user_dir = f"temp_files/user_{user_id}"
-    dir_exists = os.path.exists(user_dir)
-    
-    # Пробуем сохранить тестовые данные
-    test_data = {
-        'test': 'data',
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    save_result = save_user_data(user_id, test_data)
-    
-    debug_info = f"""
-🔧 **ДИАГНОСТИКА СОХРАНЕНИЯ:**
-
-👤 **User ID:** {user_id}
-📁 **Папка пользователя:** {user_dir}
-✅ **Папка существует:** {dir_exists}
-💾 **Права на запись:** {write_access}
-📄 **Тест сохранения:** {'✅ Успешно' if save_result else '❌ Ошибка'}
-
-💡 **Рекомендации:**
-• Убедитесь, что бот имеет права на запись в текущую директорию
-• Проверьте свободное место на диске
-• Убедитесь, что антивирус не блокирует запись файлов
-"""
-    
-    await update.message.reply_text(debug_info)
+        await update.message.reply_text(f"❌ Ошибка при анализе: {str(e)}")
+        logger.error(f"Ошибка в receive_document: {e}")
 
 # === ФУНКЦИИ АНАЛИЗА ДАННЫХ ===
 
@@ -1485,149 +1396,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if text == "📊 Полный анализ":
         await perform_full_analysis(update, context)
-        
     elif text == "🎯 Выборочный анализ":
         await selective_analysis_start(update, context)
-        
     elif text == "📈 Анализ ликвидности":
         await perform_liquidity_analysis(update, context)
-        
     elif text == "💎 Анализ рентабельности":
         await perform_profitability_analysis(update, context)
-        
     elif text == "🏛️ Финансовая устойчивость":
         await perform_stability_analysis(update, context)
-        
     elif text == "📋 Сравнение с нормативами":
         await industry_comparison_start(update, context)
-        
     elif text == "🔮 Прогноз тенденций":
         await perform_forecast_analysis(update, context)
-        
     elif text == "📄 Экспорт в TXT":
         await export_to_txt(update, context)
-        
     elif text == "📁 Загрузить файл":
         await update.message.reply_text("📎 Пожалуйста, загрузите Excel файл с отчетностью")
-        
     elif text == "ℹ️ Помощь":
         await help_command(update, context)
-        
     elif text == "🔙 Назад":
         await start(update, context)
 
-# === ОБРАБОТЧИКИ СИГНАЛОВ ДЛЯ КОРРЕКТНОГО ЗАВЕРШЕНИЯ ===
-
-def signal_handler(sig, frame):
-    """Обработчик сигналов завершения"""
-    print('\n✅ Бот корректно завершает работу...')
-    sys.exit(0)
-
-# === WEB SERVER FOR RENDER WITH WEBHOOK ===
-from flask import Flask, request, jsonify
-import threading
-import hmac
-import hashlib
-
-app = Flask(__name__)
-
-@app.route('/')
-def health_check():
-    return "✅ Financial Analyzer Bot is running!"
-
-@app.route('/health')
-def health():
-    return {"status": "healthy", "service": "telegram-bot"}
-
-@app.route(f'/{TELEGRAM_BOT_TOKEN}', methods=['POST'])
-def webhook():
-    """Обработчик вебхука от Telegram"""
-    try:
-        # Получаем данные от Telegram
-        update_data = request.get_json()
-        
-        if update_data:
-            print(f"📨 Получено обновление от пользователя")
-            
-            # Создаем временное приложение для обработки
-            async def process_update():
-                temp_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-                
-                # Регистрируем обработчики
-                temp_app.add_handler(CommandHandler("start", start))
-                temp_app.add_handler(CommandHandler("help", help_command))
-                temp_app.add_handler(MessageHandler(filters.Document.ALL, receive_document))
-                temp_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-                
-                # Обрабатываем обновление
-                update = Update.de_json(update_data, temp_app.bot)
-                await temp_app.process_update(update)
-                
-                await temp_app.shutdown()
-            
-            # Запускаем обработку
-            asyncio.run(process_update())
-            
-        return jsonify({"status": "ok"})
-        
-    except Exception as e:
-        print(f"❌ Ошибка обработки вебхука: {e}")
-        return jsonify({"status": "error"}), 500
-
-def run_web_server():
-    """Запускает web-сервер в основном потоке"""
-    port = int(os.environ.get('PORT', 10000))
-    print(f"🌐 Web server starting on port {port}")
-    print(f"🌐 Webhook URL: https://two20795.onrender.com/{TELEGRAM_BOT_TOKEN}")
-    print("🚀 Бот работает в режиме WEBHOOK")
-    app.run(host='0.0.0.0', port=port, debug=False)
+def setup_application():
+    """Настраивает и возвращает приложение"""
+    # Создаем приложение
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-# === WEBHOOK SETUP FOR RENDER ===
-import asyncio
-from telegram import Update
-from telegram.ext import Application, ContextTypes
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("template", template_command))
+    application.add_handler(CommandHandler("sample", sample_command))
+    
+    # Обработчик документов (Excel файлов)
+    application.add_handler(MessageHandler(filters.Document.ALL, receive_document))
+    
+    # Обработчик текстовых сообщений (кнопки)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # ConversationHandler для выборочного анализа
+    selective_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^(🎯 Выборочный анализ)$"), selective_analysis_start)],
+        states={
+            SELECT_INDICATORS: [
+                MessageHandler(filters.Regex("^(Выручка и прибыль|Активы и обязательства|Ликвидность|Рентабельность|Финансовая устойчивость|Оборачиваемость)$"), 
+                             handle_indicator_selection),
+                MessageHandler(filters.Regex("^(✅ Начать выборочный анализ)$"), start_selective_analysis),
+                MessageHandler(filters.Regex("^(🔙 Назад)$"), start)
+            ],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^(🔙 Назад)$"), start)]
+    )
+    application.add_handler(selective_conv_handler)
+    
+    # ConversationHandler для сравнения с нормативами
+    industry_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^(📋 Сравнение с нормативами)$"), industry_comparison_start)],
+        states={
+            SELECT_INDUSTRY: [
+                MessageHandler(filters.Regex("^(Розничная торговля|Производство|Сфера услуг)$"), handle_industry_selection),
+                MessageHandler(filters.Regex("^(🔙 Назад)$"), start)
+            ],
+        },
+        fallbacks=[MessageHandler(filters.Regex("^(🔙 Назад)$"), start)]
+    )
+    application.add_handler(industry_conv_handler)
+    
+    return application
 
-async def setup_webhook():
-    """Настраивает вебхук для Render"""
-    print("🌐 Настраиваю вебхук для Render...")
+async def main():
+    """Основная асинхронная функция"""
+    print("🔧 Инициализация бота...")
     
-    # Создаем временное приложение для настройки вебхука
-    temp_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # URL вебхука - ваш домен Render + токен
-    webhook_url = f"https://two20795.onrender.com/{TELEGRAM_BOT_TOKEN}"
-    
-    try:
-        # Устанавливаем вебхук
-        await temp_app.bot.set_webhook(webhook_url)
-        print(f"✅ Вебхук установлен: {webhook_url}")
-        
-        # Проверяем информацию о вебхуке
-        webhook_info = await temp_app.bot.get_webhook_info()
-        print(f"📊 Информация о вебхуке:")
-        print(f"   URL: {webhook_info.url}")
-        print(f"   Ожидает сообщений: {webhook_info.pending_update_count}")
-        print(f"   Ошибок: {webhook_info.last_error_message}")
-        
-    except Exception as e:
-        print(f"❌ Ошибка настройки вебхука: {e}")
-    
-    await temp_app.shutdown()
-
-# === ОСНОВНАЯ ФУНКЦИЯ ТОЛЬКО ДЛЯ WEBHOOK ===
-def main():
-    """Основная функция только для webhook режима на Render"""
-    global WRITE_ACCESS
-    
-    # Проверяем доступность записи
-    WRITE_ACCESS = check_write_permissions()
-    
-    if not WRITE_ACCESS:
-        print("⚠️ РЕЖИМ ТОЛЬКО В ПАМЯТИ - данные не сохранятся между перезапусками")
-    
-    # Настраиваем вебхук при запуске
-    print("🔄 Настраиваю вебхук...")
-    asyncio.run(setup_webhook())
+    # Настраиваем приложение
+    application = setup_application()
     
     print("✅ УЛУЧШЕННЫЙ БУХГАЛТЕРСКИЙ АНАЛИЗАТОР ЗАПУЩЕН!")
     print("🎯 Доступны функции:")
@@ -1638,22 +1480,18 @@ def main():
     print("   • Экспорт в TXT")
     print("   • Специализированные анализы")
     print("   • Полный финансовый анализ")
-    print(f"💾 Доступность записи файлов: {'✅ ДА' if WRITE_ACCESS else '❌ НЕТ'}")
-    print("🌐 Режим: WEBHOOK")
+    print("🌐 Режим: POLLING")
     print("🚀 Бот готов к работе!")
     
-    # Запускаем web-сервер в основном потоке
-    run_web_server()
-    
+    # Запускаем бота в режиме polling
+    await application.run_polling()
+
 # === ЗАПУСК ПРИЛОЖЕНИЯ ===
 if __name__ == '__main__':
     try:
-        print("🔧 Инициализация бота...")
-        main()
+        # Запускаем асинхронную main функцию
+        asyncio.run(main())
     except Exception as e:
         print(f"❌ Критическая ошибка: {e}")
         import traceback
         traceback.print_exc()
-        # Перезапуск через несколько секунд
-        import time
-        time.sleep(10)
