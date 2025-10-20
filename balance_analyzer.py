@@ -13,8 +13,6 @@ import sys
 
 # Проверка на Render
 ON_RENDER = os.environ.get('RENDER', False)
-if ON_RENDER:
-    print("🚀 Running on Render - using in-memory storage only")
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,6 +21,9 @@ logging.basicConfig(
 )
 
 TELEGRAM_BOT_TOKEN = "8458816425:AAGW5r8Xa7W5FrjOwOztgLr3bHFJqi8HaLI"
+
+# Глобальная переменная для отслеживания доступности записи
+WRITE_ACCESS = False  # Больше не нужна, т.к. работаем в RAM
 
 # Простая проверка
 if not TELEGRAM_BOT_TOKEN:
@@ -136,90 +137,15 @@ INDICATOR_GROUPS = {
 
 # === ФУНКЦИИ ФАЙЛОВОГО ХРАНИЛИЩА ===
 
-def save_uploaded_file(file_bytes, user_id, file_name):
-    """Сохраняет загруженный файл во временную директорию"""
+def read_excel_file(file_bytes, file_name):
+    """Читает Excel файл с поддержкой разных форматов"""
     try:
-        # Создаем папку для пользователя
-        user_dir = f"temp_files/user_{user_id}"
-        os.makedirs(user_dir, exist_ok=True)
-        
-        # Сохраняем файл
-        file_path = os.path.join(user_dir, file_name)
-        with open(file_path, 'wb') as f:
-            f.write(file_bytes)
-        
-        return file_path
+        if file_name.endswith('.xls'):
+            return pl.read_excel(io.BytesIO(file_bytes), engine='xlrd')
+        else:
+            return pl.read_excel(io.BytesIO(file_bytes), engine='openpyxl')
     except Exception as e:
-        print(f"❌ Ошибка сохранения файла: {e}")
-        return None
-
-def load_user_data(user_id):
-    """Загружает данные пользователя"""
-    user_data_file = f"temp_files/user_{user_id}/data.json"
-    if os.path.exists(user_data_file):
-        try:
-            with open(user_data_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"❌ Ошибка загрузки данных пользователя {user_id}: {e}")
-            return {}
-    return {}
-
-def save_user_data(user_id, data):
-    """Сохраняет данные пользователя"""
-    try:
-        user_dir = f"temp_files/user_{user_id}"
-        os.makedirs(user_dir, exist_ok=True)
-        
-        user_data_file = os.path.join(user_dir, "data.json")
-        
-        # Преобразуем данные в JSON-совместимый формат
-        serializable_data = {}
-        for key, value in data.items():
-            if key == 'periods_data':
-                # Обрабатываем данные периодов
-                serializable_periods = {}
-                for period, period_data in value.items():
-                    serializable_periods[period] = {}
-                    for indicator, indicator_value in period_data.items():
-                        # Преобразуем numpy типы в стандартные Python типы
-                        if hasattr(indicator_value, 'item'):
-                            serializable_periods[period][indicator] = indicator_value.item()
-                        else:
-                            serializable_periods[period][indicator] = float(indicator_value) if isinstance(indicator_value, (int, float)) else str(indicator_value)
-                serializable_data[key] = serializable_periods
-            else:
-                serializable_data[key] = value
-        
-        with open(user_data_file, 'w', encoding='utf-8') as f:
-            json.dump(serializable_data, f, ensure_ascii=False, indent=2, default=str)
-        
-        print(f"✅ Данные пользователя {user_id} успешно сохранены")
-        print(f"📁 Файл: {user_data_file}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Ошибка сохранения данных пользователя {user_id}: {e}")
-        import traceback
-        print(f"🔍 Детали ошибки: {traceback.format_exc()}")
-        return False
-
-def load_user_data_with_fallback(context, user_id):
-    """Загружает данные пользователя с возвратом к контексту"""
-    # Сначала пробуем из контекста
-    if context.user_data.get('periods_data'):
-        print(f"✅ Данные загружены из контекста для пользователя {user_id}")
-        return True
-    
-    # Если в контексте нет, пробуем из файла
-    user_data = load_user_data(user_id)
-    if user_data and user_data.get('periods_data'):
-        context.user_data.update(user_data)
-        print(f"✅ Данные загружены из файла для пользователя {user_id}")
-        return True
-    
-    print(f"❌ Данные не найдены для пользователя {user_id}")
-    return False
+        raise Exception(f"Не удалось прочитать файл: {str(e)}")
 
 # === ОСНОВНЫЕ ФУНКЦИИ ===
 
@@ -227,8 +153,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Улучшенный обработчик команды /start с меню выбора"""
     user_id = update.message.from_user.id
     
-    # Пробуем загрузить данные пользователя
-    load_user_data_with_fallback(context, user_id)
+    # Никаких попыток сохранять файлы, всё храним в оперативной памяти
+    context.user_data.clear()
     
     keyboard = [
         [KeyboardButton("📊 Полный анализ"), KeyboardButton("🎯 Выборочный анализ")],
@@ -239,15 +165,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
-    # Проверяем есть ли загруженные данные
-    if context.user_data.get('periods_data'):
-        status = "✅ Файл загружен"
-    else:
-        status = "📁 Ожидание загрузки файла"
-    
     await update.message.reply_text(
         f"🤖 **ДОБРО ПОЖАЛОВАТЬ В ФИНАНСОВЫЙ АНАЛИЗАТОР!**\n\n"
-        f"📊 **Статус:** {status}\n\n"
+        f"📊 **Статус:** 📁 Ожидание загрузки файла\n\n"
         f"🎯 **Выберите тип анализа:**\n\n"
         "• 📊 Полный анализ - комплексная оценка всех показателей\n"
         "• 🎯 Выборочный анализ - только нужные вам показатели\n"
